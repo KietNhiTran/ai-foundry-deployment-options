@@ -1,0 +1,137 @@
+name: Deploy Bicep (on demand)
+
+on:
+  workflow_dispatch:
+    inputs:
+      option_dir:
+        description: "Path to option directory containing main.bicep (e.g., options-infra/foundry-basic)"
+        required: true
+        type: string
+      param_file:
+        description: "Path to .bicepparam file (e.g., options-infra/foundry-basic/main.bicepparam)"
+        required: true
+        type: string
+      resource_group:
+        description: "Target Azure Resource Group name (will be created if missing)"
+        required: true
+        type: string
+      location:
+        description: "Azure location for RG creation (default: australiaeast)"
+        required: false
+        default: "australiaeast"
+        type: string
+      deployment_name:
+        description: "Optional deployment name (default: gh-<run_id>)"
+        required: false
+        default: ""
+        type: string
+      what_if:
+        description: "If true, run what-if instead of applying changes"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      OPTION_DIR: ${{ inputs.option_dir }}
+      PARAM_FILE: ${{ inputs.param_file }}
+      RG: ${{ inputs.resource_group }}
+      LOCATION: ${{ inputs.location }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set deployment name
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.deployment_name }}" ]]; then
+            echo "deployment_name=${{ inputs.deployment_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployment_name=gh-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate inputs and files exist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${OPTION_DIR}" != options-infra/* ]]; then
+            echo "ERROR: option_dir must start with 'options-infra/'. Got: ${OPTION_DIR}"
+            exit 1
+          fi
+
+          if [[ ! -f "${OPTION_DIR}/main.bicep" ]]; then
+            echo "ERROR: Missing template file: ${OPTION_DIR}/main.bicep"
+            exit 1
+          fi
+
+          if [[ ! -f "${PARAM_FILE}" ]]; then
+            echo "ERROR: Missing parameter file: ${PARAM_FILE}"
+            exit 1
+          fi
+
+          echo "Template: ${OPTION_DIR}/main.bicep"
+          echo "Parameters: ${PARAM_FILE}"
+          echo "Resource Group: ${RG}"
+          echo "Location: ${LOCATION}"
+          echo "Deployment Name: ${{ steps.names.outputs.deployment_name }}"
+          echo "What-if: ${{ inputs.what_if }}"
+
+      - name: Ensure resource group exists (create if missing)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if az group exists --name "${RG}" | grep -qi true; then
+            echo "Resource group '${RG}' already exists."
+          else
+            echo "Creating resource group '${RG}' in location '${LOCATION}'..."
+            az group create --name "${RG}" --location "${LOCATION}" --output none
+            echo "Resource group created."
+          fi
+
+      - name: Bicep build (syntax validation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az bicep build --file "${OPTION_DIR}/main.bicep" --outdir /tmp/bicep-build >/dev/null
+          echo "Bicep build OK."
+
+      - name: What-if (preview)
+        if: ${{ inputs.what_if }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --resource-group "${RG}" \
+            --name "${{ steps.names.outputs.deployment_name }}" \
+            --template-file "${OPTION_DIR}/main.bicep" \
+            --parameters @"${PARAM_FILE}"
+
+      - name: Deploy (apply)
+        if: ${{ !inputs.what_if }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "${RG}" \
+            --name "${{ steps.names.outputs.deployment_name }}" \
+            --template-file "${OPTION_DIR}/main.bicep" \
+            --parameters @"${PARAM_FILE}"
