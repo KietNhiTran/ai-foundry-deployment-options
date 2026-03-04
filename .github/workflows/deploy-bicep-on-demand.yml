@@ -1,4 +1,5 @@
 name: 'deploy-bicep-on-demand'
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,8 +8,9 @@ on:
         required: true
         type: string
       param_file:
-        description: "Path to .bicepparam file (e.g., options-infra/foundry-basic/main.bicepparam)"
-        required: true
+        description: "Optional path to .bicepparam file (e.g., options-infra/foundry-basic/main.bicepparam). Leave blank to deploy with template defaults."
+        required: false
+        default: ""
         type: string
       resource_group:
         description: "Target Azure Resource Group name (will be created if missing)"
@@ -71,6 +73,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Basic path hardening: require option dir to be within options-infra/
           if [[ "${OPTION_DIR}" != options-infra/* ]]; then
             echo "ERROR: option_dir must start with 'options-infra/'. Got: ${OPTION_DIR}"
             exit 1
@@ -81,13 +84,15 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "${PARAM_FILE}" ]]; then
-            echo "ERROR: Missing parameter file: ${PARAM_FILE}"
-            exit 1
+          if [[ -n "${PARAM_FILE}" ]]; then
+            if [[ ! -f "${PARAM_FILE}" ]]; then
+              echo "ERROR: param_file was provided but not found: ${PARAM_FILE}"
+              exit 1
+            fi
           fi
 
           echo "Template: ${OPTION_DIR}/main.bicep"
-          echo "Parameters: ${PARAM_FILE}"
+          echo "Parameters: ${PARAM_FILE:-<none>}"
           echo "Resource Group: ${RG}"
           echo "Location: ${LOCATION}"
           echo "Deployment Name: ${{ steps.names.outputs.deployment_name }}"
@@ -118,19 +123,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az deployment group what-if \
-            --resource-group "${RG}" \
-            --name "${{ steps.names.outputs.deployment_name }}" \
-            --template-file "${OPTION_DIR}/main.bicep" \
-            --parameters @"${PARAM_FILE}"
+
+          if [[ -n "${PARAM_FILE}" ]]; then
+            az deployment group what-if \
+              --resource-group "${RG}" \
+              --name "${{ steps.names.outputs.deployment_name }}" \
+              --template-file "${OPTION_DIR}/main.bicep" \
+              --parameters @"${PARAM_FILE}"
+          else
+            az deployment group what-if \
+              --resource-group "${RG}" \
+              --name "${{ steps.names.outputs.deployment_name }}" \
+              --template-file "${OPTION_DIR}/main.bicep"
+          fi
 
       - name: Deploy (apply)
         if: ${{ !inputs.what_if }}
         shell: bash
         run: |
           set -euo pipefail
-          az deployment group create \
-            --resource-group "${RG}" \
-            --name "${{ steps.names.outputs.deployment_name }}" \
-            --template-file "${OPTION_DIR}/main.bicep" \
-            --parameters @"${PARAM_FILE}"
+
+          if [[ -n "${PARAM_FILE}" ]]; then
+            az deployment group create \
+              --resource-group "${RG}" \
+              --name "${{ steps.names.outputs.deployment_name }}" \
+              --template-file "${OPTION_DIR}/main.bicep" \
+              --parameters @"${PARAM_FILE}"
+          else
+            az deployment group create \
+              --resource-group "${RG}" \
+              --name "${{ steps.names.outputs.deployment_name }}" \
+              --template-file "${OPTION_DIR}/main.bicep"
+          fi
