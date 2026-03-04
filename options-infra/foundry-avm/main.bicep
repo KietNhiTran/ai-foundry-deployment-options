@@ -14,7 +14,7 @@ module vnet '../modules/networking/vnet.bicep' = {
   params: {
     vnetName: 'project-vnet-${resourceToken}'
     location: location
-    vnetAddressPrefix: '172.17.0.0/22'
+    vnetAddressPrefix: '172.17.0.0/21'
   }
 }
 
