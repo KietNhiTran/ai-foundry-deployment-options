@@ -1,3 +1,4 @@
+name: 'deploy-bicep-on-demand'
 on:
   workflow_dispatch:
     inputs:
